@@ -11,9 +11,16 @@ class YourRedisServer
 
     # instantiate new TCP Server
     server = TCPServer.new(@port)
-    # wait for client to connect by accepting incoming connection & retuns client socket
-    client = server.accept
 
+    loop {
+      # accept multiple connections
+      Thread.new(server.accept) { |client| handle_client(client) }
+    }
+  end
+
+  private
+
+  def handle_client(client)
     # read input
     while line = client.gets
       input = line.upcase.chomp
