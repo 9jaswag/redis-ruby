@@ -9,9 +9,15 @@ class YourRedisServer
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     puts("Logs from your program will appear here!")
 
-    # Uncomment this block to pass the first stage
+    # instantiate new TCP server
     server = TCPServer.new(@port)
+    # wait for client to connect
     client = server.accept
+
+    # respond to PING command
+    client.puts("+PONG\r\n")
+    # close server
+    client.close
   end
 end
 
