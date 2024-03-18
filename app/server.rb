@@ -1,10 +1,13 @@
 # frozen_string_literal: true
 
 require 'socket'
+require_relative 'parser'
 
 # Redis server
 class YourRedisServer
   PING_COMMAND = 'PING'
+  ECHO_COMMAND = 'ECHO'
+  CRLF = "\r\n"
 
   def initialize(port)
     @port = port
@@ -41,20 +44,40 @@ class YourRedisServer
 
   private
 
-  def handle_client(client)
+  def handle_client(client) # rubocop:disable Metrics/MethodLength
     # read input: []
-    line = client.readpartial(1024).upcase.chomp
-    inputs = line.split(/[\r\n]+/)
+    line = client.readpartial(1024).chomp
+    # parse input
+    inputs = Parser.parse(line)
 
-    inputs.each do |input|
-      # respond to PING command
-      client.puts("+PONG\r\n") if input == PING_COMMAND
+    inputs.each_with_index do |input, index|
+      case input.upcase
+      when PING_COMMAND
+        respond_to_ping(client)
+      when ECHO_COMMAND
+        respond_to_echo(client, inputs[index + 1])
+      end
     end
-  rescue EOFError => e
+  rescue EOFError
     # delete client
     @clients.delete(client)
     # close connection
     client.close
+  end
+
+  def respond_to_ping(client)
+    # respond to PING command
+    client.puts("+PONG\r\n")
+  end
+
+  def respond_to_echo(client, argument)
+    # respond to ECHO command
+    response = "$#{encode_string(argument.length)}#{encode_string(argument)}"
+    client.puts(response)
+  end
+
+  def encode_string(string)
+    "#{string}#{CRLF}"
   end
 end
 
