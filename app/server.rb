@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'socket'
+require 'date'
 require_relative 'parser'
 
 # Redis server
@@ -47,7 +48,7 @@ class YourRedisServer
 
   private
 
-  def handle_client(client) # rubocop:disable Metrics/MethodLength, Metrics/AbcSize
+  def handle_client(client) # rubocop:disable Metrics/MethodLength, Metrics/AbcSize, Metrics/CyclomaticComplexity
     # read input: []
     line = client.readpartial(1024).chomp
     # parse input
@@ -60,9 +61,11 @@ class YourRedisServer
       when ECHO_COMMAND
         respond_to_echo(client, inputs[index + 1])
       when SET_COMMAND
-        set_value(client, inputs[index + 1], inputs[index + 2])
+        exp = expiry?(inputs[index + 3]) ? inputs[index + 4] : nil
+        set_value(client, inputs[index + 1], inputs[index + 2], exp)
       when GET_COMMAND
-        get_value(client, inputs[index + 1])
+        resp = get_value(inputs[index + 1])
+        client.puts(resp)
       end
     end
   rescue EOFError
@@ -83,25 +86,39 @@ class YourRedisServer
     client.puts(response)
   end
 
-  def set_value(client, key, value)
+  def set_value(client, key, value, exp)
     # respond to SET command
-    @store[key] = value
+    exp_at = exp.nil? ? nil : (exp.to_i / 1000.0).to_f + Time.now.to_f
+    @store[key] = { value: value, exp: exp_at }
 
     client.puts("+OK#{CRLF}")
   end
 
-  def get_value(client, key)
+  def get_value(key)
     # respond to GET command
     val = @store.fetch(key, nil)
 
-    return "$-1#{CRLF}" if val.nil?
+    return null_bulk_string if val.nil?
 
-    response = encode_string(val)
-    client.puts(response)
+    if val[:exp] && (Time.now.to_f > val[:exp])
+      @store.delete(key)
+
+      return null_bulk_string
+    end
+
+    encode_string(val[:value])
   end
 
   def encode_string(string)
     "$#{string.length}#{CRLF}#{string}#{CRLF}"
+  end
+
+  def null_bulk_string
+    "$-1#{CRLF}"
+  end
+
+  def expiry?(input)
+    input&.upcase == 'PX'
   end
 end
 
