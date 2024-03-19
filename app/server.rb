@@ -122,4 +122,7 @@ class YourRedisServer
   end
 end
 
-YourRedisServer.new(6379).start
+index = ARGV.index('--port')
+port = index.nil? ? 6379 : ARGV[index + 1].to_i
+
+YourRedisServer.new(port).start
