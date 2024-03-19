@@ -7,6 +7,8 @@ require_relative 'parser'
 class YourRedisServer
   PING_COMMAND = 'PING'
   ECHO_COMMAND = 'ECHO'
+  SET_COMMAND = 'SET'
+  GET_COMMAND = 'GET'
   CRLF = "\r\n"
 
   def initialize(port)
@@ -15,6 +17,7 @@ class YourRedisServer
     @server = TCPServer.new(@port)
     # list of clients
     @clients = []
+    @store = {}
   end
 
   def start # rubocop:disable Metrics/MethodLength
@@ -44,7 +47,7 @@ class YourRedisServer
 
   private
 
-  def handle_client(client) # rubocop:disable Metrics/MethodLength
+  def handle_client(client) # rubocop:disable Metrics/MethodLength, Metrics/AbcSize
     # read input: []
     line = client.readpartial(1024).chomp
     # parse input
@@ -56,6 +59,10 @@ class YourRedisServer
         respond_to_ping(client)
       when ECHO_COMMAND
         respond_to_echo(client, inputs[index + 1])
+      when SET_COMMAND
+        set_value(client, inputs[index + 1], inputs[index + 2])
+      when GET_COMMAND
+        get_value(client, inputs[index + 1])
       end
     end
   rescue EOFError
@@ -67,17 +74,34 @@ class YourRedisServer
 
   def respond_to_ping(client)
     # respond to PING command
-    client.puts("+PONG\r\n")
+    client.puts("+PONG#{CRLF}")
   end
 
   def respond_to_echo(client, argument)
     # respond to ECHO command
-    response = "$#{encode_string(argument.length)}#{encode_string(argument)}"
+    response = encode_string(argument)
+    client.puts(response)
+  end
+
+  def set_value(client, key, value)
+    # respond to SET command
+    @store[key] = value
+
+    client.puts("+OK#{CRLF}")
+  end
+
+  def get_value(client, key)
+    # respond to GET command
+    val = @store.fetch(key, nil)
+
+    return "$-1#{CRLF}" if val.nil?
+
+    response = encode_string(val)
     client.puts(response)
   end
 
   def encode_string(string)
-    "#{string}#{CRLF}"
+    "$#{string.length}#{CRLF}#{string}#{CRLF}"
   end
 end
 
