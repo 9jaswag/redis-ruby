@@ -13,8 +13,9 @@ class YourRedisServer
   INFO_COMMAND = 'INFO'
   CRLF = "\r\n"
 
-  def initialize(port)
+  def initialize(port, master_port)
     @port = port
+    @master_port = master_port
     # instantiate new TCP Server
     @server = TCPServer.new(@port)
     # list of clients
@@ -131,13 +132,17 @@ class YourRedisServer
   end
 
   def replication_info
+    role = @master_port.nil? ? 'master' : 'slave'
     <<-REPLICATION
-    role:master
+    role:#{role}
     REPLICATION
   end
 end
 
 index = ARGV.index('--port')
 port = index.nil? ? 6379 : ARGV[index + 1].to_i
+master_index = ARGV.index('--replicaof')
+# master_host = master_index.nil? ? nil : ARGV[master_index + 1].to_i
+master_port = master_index.nil? ? nil : ARGV[master_index + 2].to_i
 
-YourRedisServer.new(port).start
+YourRedisServer.new(port, master_port).start
