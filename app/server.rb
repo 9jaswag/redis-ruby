@@ -10,6 +10,7 @@ class YourRedisServer
   ECHO_COMMAND = 'ECHO'
   SET_COMMAND = 'SET'
   GET_COMMAND = 'GET'
+  INFO_COMMAND = 'INFO'
   CRLF = "\r\n"
 
   def initialize(port)
@@ -66,6 +67,8 @@ class YourRedisServer
       when GET_COMMAND
         resp = get_value(inputs[index + 1])
         client.puts(resp)
+      when INFO_COMMAND
+        respond_to_info(client, inputs[index + 1])
       end
     end
   rescue EOFError
@@ -119,6 +122,18 @@ class YourRedisServer
 
   def expiry?(input)
     input&.upcase == 'PX'
+  end
+
+  def respond_to_info(client, parameter)
+    response = replication_info.strip if parameter == 'replication'
+
+    client.puts(encode_string(response))
+  end
+
+  def replication_info
+    <<-REPLICATION
+    role:master
+    REPLICATION
   end
 end
 
