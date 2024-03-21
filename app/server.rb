@@ -5,7 +5,7 @@ require 'date'
 require_relative 'parser'
 
 # Redis server
-class YourRedisServer
+class YourRedisServer # rubocop:disable Metrics/ClassLength
   PING_COMMAND = 'PING'
   ECHO_COMMAND = 'ECHO'
   SET_COMMAND = 'SET'
@@ -15,12 +15,17 @@ class YourRedisServer
 
   def initialize(port, master_port)
     @port = port
+    # port the master replica is running on
     @master_port = master_port
     # instantiate new TCP Server
     @server = TCPServer.new(@port)
     # list of clients
     @clients = []
+    # store
     @store = {}
+
+    @replication_id = replication_id
+    @offset = offset
   end
 
   def start # rubocop:disable Metrics/MethodLength
@@ -126,16 +131,30 @@ class YourRedisServer
   end
 
   def respond_to_info(client, parameter)
-    response = replication_info.strip if parameter == 'replication'
+    response = replication_info if parameter == 'replication'
 
     client.puts(encode_string(response))
   end
 
   def replication_info
     role = @master_port.nil? ? 'master' : 'slave'
-    <<-REPLICATION
+    resp = <<-REPLICATION
     role:#{role}
     REPLICATION
+
+    resp = resp.strip
+    resp += "\nmaster_replid:#{@replication_id}" if @replication_id
+    resp += "\nmaster_repl_offset:#{@offset}" if @offset
+
+    resp
+  end
+
+  def replication_id
+    '8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb'
+  end
+
+  def offset
+    0
   end
 end
 
