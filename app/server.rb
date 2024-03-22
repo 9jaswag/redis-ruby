@@ -3,15 +3,18 @@
 require 'socket'
 require 'date'
 require_relative 'parser'
+require_relative 'response'
 
 # Redis server
 class YourRedisServer # rubocop:disable Metrics/ClassLength
+  include Response
+
   PING_COMMAND = 'PING'
   ECHO_COMMAND = 'ECHO'
   SET_COMMAND = 'SET'
   GET_COMMAND = 'GET'
   INFO_COMMAND = 'INFO'
-  CRLF = "\r\n"
+  REPLCONF_COMMAND = 'REPLCONF'
 
   def initialize(port, master_host, master_port)
     @port = port
@@ -78,6 +81,8 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
         client.puts(resp)
       when INFO_COMMAND
         respond_to_info(client, inputs[index + 1])
+      when REPLCONF_COMMAND
+        client.puts(ok_string)
       end
     end
   rescue EOFError
@@ -89,7 +94,7 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
 
   def respond_to_ping(client)
     # respond to PING command
-    client.puts("+PONG#{CRLF}")
+    client.puts(pong_string)
   end
 
   def respond_to_echo(client, argument)
@@ -103,7 +108,7 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
     exp_at = exp.nil? ? nil : (exp.to_i / 1000.0).to_f + Time.now.to_f
     @store[key] = { value: value, exp: exp_at }
 
-    client.puts("+OK#{CRLF}")
+    client.puts(ok_string)
   end
 
   def get_value(key)
@@ -119,33 +124,6 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
     end
 
     generate_bulk_string(val[:value])
-  end
-
-  def generate_bulk_string(string)
-    "$#{string.length}#{CRLF}#{string}#{CRLF}"
-  end
-
-  def generate_resp_array(value)
-    # TODO: handle nested arrs
-    res = "*#{value.size}#{CRLF}"
-    value.each do |val|
-      if val.instance_of?(Integer)
-        res += ":#{val}#{CRLF}"
-        next
-      end
-
-      res += generate_bulk_string(val)
-    end
-
-    res
-  end
-
-  def null_bulk_string
-    "$-1#{CRLF}"
-  end
-
-  def null_resp_array
-    "*-1#{CRLF}"
   end
 
   def expiry?(input)
