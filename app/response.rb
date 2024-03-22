@@ -23,19 +23,15 @@ module Response
     res
   end
 
+  def generate_simple_string(string)
+    "+#{string}#{CRLF}"
+  end
+
   def null_bulk_string
     "$-1#{CRLF}"
   end
 
   def null_resp_array
     "*-1#{CRLF}"
-  end
-
-  def pong_string
-    "+PONG#{CRLF}"
-  end
-
-  def ok_string
-    "+OK#{CRLF}"
   end
 end

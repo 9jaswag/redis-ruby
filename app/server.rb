@@ -4,17 +4,12 @@ require 'socket'
 require 'date'
 require_relative 'parser'
 require_relative 'response'
+require_relative 'commands'
 
 # Redis server
 class YourRedisServer # rubocop:disable Metrics/ClassLength
   include Response
-
-  PING_COMMAND = 'PING'
-  ECHO_COMMAND = 'ECHO'
-  SET_COMMAND = 'SET'
-  GET_COMMAND = 'GET'
-  INFO_COMMAND = 'INFO'
-  REPLCONF_COMMAND = 'REPLCONF'
+  include Commands
 
   def initialize(port, master_host, master_port)
     @port = port
@@ -82,7 +77,9 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
       when INFO_COMMAND
         respond_to_info(client, inputs[index + 1])
       when REPLCONF_COMMAND
-        client.puts(ok_string)
+        client.puts(generate_simple_string('OK'))
+      when PSYNC_COMMAND
+        client.puts(generate_simple_string('FULLRESYNC * 0'))
       end
     end
   rescue EOFError
@@ -94,7 +91,7 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
 
   def respond_to_ping(client)
     # respond to PING command
-    client.puts(pong_string)
+    client.puts(generate_simple_string('PONG'))
   end
 
   def respond_to_echo(client, argument)
@@ -108,7 +105,7 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
     exp_at = exp.nil? ? nil : (exp.to_i / 1000.0).to_f + Time.now.to_f
     @store[key] = { value: value, exp: exp_at }
 
-    client.puts(ok_string)
+    client.puts(generate_simple_string('OK'))
   end
 
   def get_value(key)
