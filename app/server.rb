@@ -186,10 +186,20 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
   def perform_handshake
     return if master?
 
+    # connect to master
     master = TCPSocket.open(@master[:host], @master[:port])
     resp = generate_resp_array(['ping'])
 
+    # send first response
     master.puts(resp)
+
+    # send second response
+    listening_port = "REPLCONF listening-port #{@port}".split(' ')
+    master.puts(generate_resp_array(listening_port))
+
+    # send third response
+    capabilities = 'REPLCONF capa psync2'.split(' ')
+    master.puts(generate_resp_array([capabilities]))
   end
 end
 
