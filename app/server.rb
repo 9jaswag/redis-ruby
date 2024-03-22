@@ -190,16 +190,20 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
     master = TCPSocket.open(@master[:host], @master[:port])
     resp = generate_resp_array(['ping'])
 
-    # send first response
+    # send PING response
     master.puts(resp)
 
-    # send second response
+    # send REPLCONF response
     listening_port = "REPLCONF listening-port #{@port}".split(' ')
     master.puts(generate_resp_array(listening_port))
 
-    # send third response
+    # send REPLCONF response
     capabilities = 'REPLCONF capa psync2'.split(' ')
-    master.puts(generate_resp_array([capabilities]))
+    master.puts(generate_resp_array(capabilities))
+
+    # send PSYNC response
+    psync = 'PSYNC ? -1'.split(' ')
+    master.puts(generate_resp_array(psync))
   end
 end
 
