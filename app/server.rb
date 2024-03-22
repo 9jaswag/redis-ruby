@@ -13,10 +13,8 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
   INFO_COMMAND = 'INFO'
   CRLF = "\r\n"
 
-  def initialize(port, master_port)
+  def initialize(port, master_host, master_port)
     @port = port
-    # port the master replica is running on
-    @master_port = master_port
     # instantiate new TCP Server
     @server = TCPServer.new(@port)
     # list of clients
@@ -24,8 +22,13 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
     # store
     @store = {}
 
+    # host & port the master replica is running on
+    @master = { host: master_host, port: master_port }
     @replication_id = replication_id
     @offset = offset
+
+    # handshake
+    perform_handshake
   end
 
   def start # rubocop:disable Metrics/MethodLength
@@ -91,7 +94,7 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
 
   def respond_to_echo(client, argument)
     # respond to ECHO command
-    response = encode_string(argument)
+    response = generate_bulk_string(argument)
     client.puts(response)
   end
 
@@ -115,15 +118,34 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
       return null_bulk_string
     end
 
-    encode_string(val[:value])
+    generate_bulk_string(val[:value])
   end
 
-  def encode_string(string)
+  def generate_bulk_string(string)
     "$#{string.length}#{CRLF}#{string}#{CRLF}"
+  end
+
+  def generate_resp_array(value)
+    # TODO: handle nested arrs
+    res = "*#{value.size}#{CRLF}"
+    value.each do |val|
+      if val.instance_of?(Integer)
+        res += ":#{val}#{CRLF}"
+        next
+      end
+
+      res += generate_bulk_string(val)
+    end
+
+    res
   end
 
   def null_bulk_string
     "$-1#{CRLF}"
+  end
+
+  def null_resp_array
+    "*-1#{CRLF}"
   end
 
   def expiry?(input)
@@ -133,11 +155,11 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
   def respond_to_info(client, parameter)
     response = replication_info if parameter == 'replication'
 
-    client.puts(encode_string(response))
+    client.puts(generate_bulk_string(response))
   end
 
   def replication_info
-    role = @master_port.nil? ? 'master' : 'slave'
+    role = @master[:port].nil? ? 'master' : 'slave'
     resp = <<-REPLICATION
     role:#{role}
     REPLICATION
@@ -156,12 +178,25 @@ class YourRedisServer # rubocop:disable Metrics/ClassLength
   def offset
     0
   end
+
+  def master?
+    @master[:host].nil? && @master[:port].nil?
+  end
+
+  def perform_handshake
+    return if master?
+
+    master = TCPSocket.open(@master[:host], @master[:port])
+    resp = generate_resp_array(['ping'])
+
+    master.puts(resp)
+  end
 end
 
 index = ARGV.index('--port')
 port = index.nil? ? 6379 : ARGV[index + 1].to_i
 master_index = ARGV.index('--replicaof')
-# master_host = master_index.nil? ? nil : ARGV[master_index + 1].to_i
+master_host = master_index.nil? ? nil : ARGV[master_index + 1].to_i
 master_port = master_index.nil? ? nil : ARGV[master_index + 2].to_i
 
-YourRedisServer.new(port, master_port).start
+YourRedisServer.new(port, master_host, master_port).start
