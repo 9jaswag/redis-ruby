@@ -8,15 +8,16 @@ class ClientHandler
   include Response
   include Commands
 
-  attr_reader :client, :master, :replication_id, :offset, :store
+  attr_reader :client, :master, :replication_id, :offset, :store, :replicas
 
-  def initialize(client, master, replication_id, offset, store)
+  def initialize(client, master, replication_id, offset, store, replicas) # rubocop:disable Metrics/ParameterLists
     @client = client
     @master = master
     @replication_id = replication_id
     @offset = offset
     # TODO: parent class & store state
     @store = store
+    @replicas = replicas
   end
 
   def execute_command(commands) # rubocop:disable Metrics/MethodLength, Metrics/CyclomaticComplexity, Metrics/AbcSize
@@ -28,6 +29,10 @@ class ClientHandler
         respond_to_echo(commands[index + 1])
       when SET_COMMAND
         exp = expiry?(commands[index + 3]) ? commands[index + 4] : nil
+
+        # update replicas
+        update_replicas(commands) if master?
+
         set_value(commands[index + 1], commands[index + 2], exp)
       when GET_COMMAND
         resp = get_value(commands[index + 1])
@@ -37,7 +42,10 @@ class ClientHandler
       when REPLCONF_COMMAND
         client.write(generate_simple_string('OK'))
       when PSYNC_COMMAND
-        client.write(generate_simple_string('FULLRESYNC * 0'))
+        # add client to replicas: ideally this should be done after RDB has been loaded by replica
+        replicas << client if master?
+
+        client.write(generate_simple_string("FULLRESYNC #{replication_id} #{offset}"))
         # send RDS file
         res = "$#{decoded_hex_rdb.length}#{CRLF}#{decoded_hex_rdb}"
         client.write(res)
@@ -93,7 +101,7 @@ class ClientHandler
 
   def replication_info
     # master?
-    role = @master[:port].nil? ? 'master' : 'slave'
+    role = master? ? 'master' : 'slave'
     resp = <<-REPLICATION
       role:#{role}
     REPLICATION
@@ -112,5 +120,15 @@ class ClientHandler
 
   def decoded_hex_rdb
     [empty_hex_rdb].pack('H*')
+  end
+
+  def master?
+    @master[:host].nil? && @master[:port].nil?
+  end
+
+  def update_replicas(inputs)
+    replicas.each do |client|
+      client.write(generate_resp_array([inputs[0], inputs[1], inputs[2]]))
+    end
   end
 end

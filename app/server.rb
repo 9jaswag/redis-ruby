@@ -28,6 +28,7 @@ class YourRedisServer
 
     # handshake
     perform_handshake
+    @replicas = []
   end
 
   def start # rubocop:disable Metrics/MethodLength
@@ -63,7 +64,7 @@ class YourRedisServer
     # parse input
     inputs = Parser.parse(line)
 
-    ClientHandler.new(client, @master, @replication_id, @offset, @store).execute_command(inputs)
+    ClientHandler.new(client, @master, @replication_id, @offset, @store, @replicas).execute_command(inputs)
   rescue EOFError
     # delete client
     @clients.delete(client)
@@ -83,6 +84,7 @@ class YourRedisServer
     @master[:host].nil? && @master[:port].nil?
   end
 
+  # run by replica server
   def perform_handshake
     return if master?
 
