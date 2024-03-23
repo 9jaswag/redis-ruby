@@ -31,9 +31,9 @@ class ClientHandler
         exp = expiry?(commands[index + 3]) ? commands[index + 4] : nil
 
         # update replicas
-        update_replicas(commands) if master?
+        update_replicas(commands[index..index + 2]) if master?
 
-        set_value(commands[index + 1], commands[index + 2], exp)
+        set_value(commands[index + 1..index + 2], exp)
       when GET_COMMAND
         resp = get_value(commands[index + 1])
         client.write(resp)
@@ -66,7 +66,7 @@ class ClientHandler
     client.write(response)
   end
 
-  def set_value(key, value, exp)
+  def set_value((key, value), exp)
     # respond to SET command
     exp_at = exp.nil? ? nil : (exp.to_i / 1000.0).to_f + Time.now.to_f
     store[key] = { value: value, exp: exp_at }
