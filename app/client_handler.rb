@@ -4,7 +4,7 @@ require_relative 'response'
 require_relative 'commands'
 
 # execute commands based on input from client
-class ClientHandler
+class ClientHandler # rubocop:disable Metrics/ClassLength
   include Response
   include Commands
 
@@ -34,7 +34,7 @@ class ClientHandler
                  when INFO_COMMAND
                    respond_to_info(commands[index + 1])
                  when REPLCONF_COMMAND
-                   generate_simple_string('OK')
+                   respond_to_replconf(commands[index + 1])
                  when PSYNC_COMMAND # executed in master server
                    respond_to_psync_command
                  end
@@ -122,6 +122,12 @@ class ClientHandler
 
     # send RDB file to replica
     "$#{decoded_hex_rdb.length}#{CRLF}#{decoded_hex_rdb}"
+  end
+
+  def respond_to_replconf(type)
+    return generate_resp_array(['REPLCONF', 'ACK', offset.to_s]) if type == REPLCONF_GETACK_COMMAND
+
+    generate_simple_string('OK')
   end
 
   def master?
