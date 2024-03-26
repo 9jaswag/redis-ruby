@@ -8,48 +8,38 @@ class ClientHandler
   include Response
   include Commands
 
-  attr_reader :client, :master, :replication_id, :offset, :store, :replicas
+  attr_reader :client, :master_info, :replication_id, :offset, :store, :replicas
 
-  def initialize(client, master, replication_id, offset, store, replicas) # rubocop:disable Metrics/ParameterLists
+  def initialize(client, master_info, replication_id, offset, store, replicas) # rubocop:disable Metrics/ParameterLists
     @client = client
-    @master = master
+    @master_info = master_info
     @replication_id = replication_id
     @offset = offset
-    # TODO: parent class & store state
     @store = store
     @replicas = replicas
   end
 
   def execute_command(commands) # rubocop:disable Metrics/MethodLength, Metrics/CyclomaticComplexity, Metrics/AbcSize
     commands.each_with_index do |input, index|
-      case input.upcase
-      when PING_COMMAND
-        respond_to_ping
-      when ECHO_COMMAND
-        respond_to_echo(commands[index + 1])
-      when SET_COMMAND
-        exp = expiry?(commands[index + 3]) ? commands[index + 4] : nil
+      response = case input.upcase
+                 when PING_COMMAND
+                   respond_to_ping
+                 when ECHO_COMMAND
+                   respond_to_echo(commands[index + 1])
+                 when SET_COMMAND
+                   exp = expiry?(commands[index + 3]) ? commands[index + 4] : nil
+                   set_value(commands[index + 1..index + 2], exp)
+                 when GET_COMMAND
+                   get_value(commands[index + 1])
+                 when INFO_COMMAND
+                   respond_to_info(commands[index + 1])
+                 when REPLCONF_COMMAND
+                   generate_simple_string('OK')
+                 when PSYNC_COMMAND # executed in master server
+                   respond_to_psync_command
+                 end
 
-        # update replicas
-        update_replicas(commands[index..index + 2]) if master?
-
-        set_value(commands[index + 1..index + 2], exp)
-      when GET_COMMAND
-        resp = get_value(commands[index + 1])
-        client.write(resp)
-      when INFO_COMMAND
-        respond_to_info(commands[index + 1])
-      when REPLCONF_COMMAND
-        client.write(generate_simple_string('OK'))
-      when PSYNC_COMMAND
-        # add client to replicas: ideally this should be done after RDB has been loaded by replica
-        replicas << client if master?
-
-        client.write(generate_simple_string("FULLRESYNC #{replication_id} #{offset}"))
-        # send RDS file
-        res = "$#{decoded_hex_rdb.length}#{CRLF}#{decoded_hex_rdb}"
-        client.write(res)
-      end
+      client.write(response) unless response.nil?
     end
   end
 
@@ -57,13 +47,12 @@ class ClientHandler
 
   def respond_to_ping
     # respond to PING command
-    client.write(generate_simple_string('PONG'))
+    generate_simple_string('PONG')
   end
 
   def respond_to_echo(argument)
     # respond to ECHO command
-    response = generate_bulk_string(argument)
-    client.write(response)
+    generate_bulk_string(argument)
   end
 
   def set_value((key, value), exp)
@@ -71,7 +60,11 @@ class ClientHandler
     exp_at = exp.nil? ? nil : (exp.to_i / 1000.0).to_f + Time.now.to_f
     store[key] = { value: value, exp: exp_at }
 
-    client.write(generate_simple_string('OK'))
+    # update replicas if running server is master server
+    update_replicas(SET_COMMAND, key, value)
+
+    # only send response if client == master...running on master port
+    generate_simple_string('OK') unless master_client?(client)
   end
 
   def get_value(key)
@@ -96,11 +89,10 @@ class ClientHandler
   def respond_to_info(parameter)
     response = replication_info if parameter == 'replication'
 
-    client.write(generate_bulk_string(response))
+    generate_bulk_string(response)
   end
 
   def replication_info
-    # master?
     role = master? ? 'master' : 'slave'
     resp = <<-REPLICATION
       role:#{role}
@@ -122,13 +114,34 @@ class ClientHandler
     [empty_hex_rdb].pack('H*')
   end
 
-  def master?
-    @master[:host].nil? && @master[:port].nil?
+  def respond_to_psync_command
+    # store client as a replica: ideally this should be done after RDB has been loaded by replica
+    replicas << client if master?
+
+    client.write(generate_simple_string("FULLRESYNC #{replication_id} #{offset}"))
+
+    # send RDB file to replica
+    "$#{decoded_hex_rdb.length}#{CRLF}#{decoded_hex_rdb}"
   end
 
-  def update_replicas(inputs)
+  def master?
+    master_info[:host].nil? && master_info[:port].nil?
+  end
+
+  def update_replicas(command, key, value)
+    return unless master?
+
     replicas.each do |client|
-      client.write(generate_resp_array([inputs[0], inputs[1], inputs[2]]))
+      client.write(generate_resp_array([command, key, value]))
     end
+  end
+
+  def master_client?(client)
+    return false if master?
+
+    host = client.peeraddr[2]
+    port = client.peeraddr[1]
+
+    master_info[:host] == host && master_info[:port] == port
   end
 end

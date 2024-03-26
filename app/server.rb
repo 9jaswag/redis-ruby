@@ -22,10 +22,12 @@ class YourRedisServer
     @store = {}
 
     # host & port the master replica is running on
-    @master = { host: master_host, port: master_port }
+    @master_info = { host: master_host, port: master_port }
     @replication_id = replication_id
     @offset = offset
 
+    # connect to master server
+    connect_to_master_server
     # handshake
     perform_handshake
     @replicas = []
@@ -64,7 +66,7 @@ class YourRedisServer
     # parse input
     inputs = Parser.parse(line)
 
-    ClientHandler.new(client, @master, @replication_id, @offset, @store, @replicas).execute_command(inputs)
+    ClientHandler.new(client, @master_info, @replication_id, @offset, @store, @replicas).execute_command(inputs)
   rescue EOFError
     # delete client
     @clients.delete(client)
@@ -81,31 +83,46 @@ class YourRedisServer
   end
 
   def master?
-    @master[:host].nil? && @master[:port].nil?
+    @master_info[:host].nil? && @master_info[:port].nil?
   end
 
-  # run by replica server
-  def perform_handshake
+  def connect_to_master_server
     return if master?
 
     # connect to master
-    master = TCPSocket.open(@master[:host], @master[:port])
+    @master = TCPSocket.open(@master_info[:host], @master_info[:port])
+
+    # add master to list of clients
+    @clients << @master
+  end
+
+  # run by replica server when connecting to master
+  def perform_handshake # rubocop:disable Metrics/MethodLength
+    return if master?
+
     resp = generate_resp_array(['ping'])
 
     # send PING response
-    master.write(resp)
+    @master.write(resp)
+
+    @master.gets
 
     # send REPLCONF response
     listening_port = "REPLCONF listening-port #{@port}".split(' ')
-    master.write(generate_resp_array(listening_port))
+    @master.write(generate_resp_array(listening_port))
+
+    # wait for response from master
+    @master.gets
 
     # send REPLCONF response
     capabilities = 'REPLCONF capa psync2'.split(' ')
-    master.write(generate_resp_array(capabilities))
+    @master.write(generate_resp_array(capabilities))
+
+    @master.gets
 
     # send PSYNC response
     psync = 'PSYNC ? -1'.split(' ')
-    master.write(generate_resp_array(psync))
+    @master.write(generate_resp_array(psync))
   end
 end
 
