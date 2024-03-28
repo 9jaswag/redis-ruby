@@ -12,6 +12,8 @@ class YourRedisServer
   include Response
   include Commands
 
+  attr_accessor :offset
+
   def initialize(port, master_host, master_port)
     @port = port
     # instantiate new TCP Server
@@ -23,8 +25,8 @@ class YourRedisServer
 
     # host & port the master replica is running on
     @master_info = { host: master_host, port: master_port }
-    @replication_id = replication_id
-    @offset = offset
+    @replication_id = '8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb'
+    @offset = 0
 
     # connect to master server
     connect_to_master_server
@@ -66,7 +68,7 @@ class YourRedisServer
     # parse input
     inputs = Parser.parse(line)
 
-    ClientHandler.new(client, @master_info, @replication_id, @offset, @store, @replicas).execute_command(inputs)
+    execute_command(client, inputs)
   rescue EOFError
     # delete client
     @clients.delete(client)
@@ -74,20 +76,22 @@ class YourRedisServer
     client.close
   end
 
-  def replication_id
-    '8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb'
-  end
-
-  def offset
-    0
-  end
-
-  def master?
+  def master_server?
     @master_info[:host].nil? && @master_info[:port].nil?
   end
 
+  def client_is_master?(client)
+    return false if master_server?
+
+    # 127.0.0.1
+    # host = client.peeraddr[2]
+    port = client.peeraddr[1]
+
+    @master_info[:port] == port
+  end
+
   def connect_to_master_server
-    return if master?
+    return if master_server?
 
     # connect to master
     @master = TCPSocket.open(@master_info[:host], @master_info[:port])
@@ -98,7 +102,7 @@ class YourRedisServer
 
   # run by replica server when connecting to master
   def perform_handshake # rubocop:disable Metrics/MethodLength
-    return if master?
+    return if master_server?
 
     resp = generate_resp_array(['ping'])
 
@@ -123,6 +127,24 @@ class YourRedisServer
     # send PSYNC response
     psync = 'PSYNC ? -1'.split(' ')
     @master.write(generate_resp_array(psync))
+  end
+
+  def execute_command(client, commands)
+    return unless commands&.length&.positive?
+
+    commands.each do |command|
+      ClientHandler.new(client, master_server?, client_is_master?(client), @replication_id, offset, @store,
+                        @replicas).execute_command(command)
+
+      update_offset(command) if client_is_master?(client)
+    end
+  end
+
+  def update_offset(command)
+    return if command.empty?
+
+    resp = generate_resp_array(command.split)
+    @offset += resp.bytesize
   end
 end
 

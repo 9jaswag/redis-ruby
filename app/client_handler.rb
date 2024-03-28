@@ -3,72 +3,88 @@
 require_relative 'response'
 require_relative 'commands'
 
+# Command class
+class Command
+  attr_reader :name
+
+  def initialize(name)
+    @name = name
+  end
+
+  def match?(input)
+    input.match?(regex)
+  end
+
+  private
+
+  def regex
+    /\b#{Regexp.escape(name)}\b/i
+  end
+end
+
 # execute commands based on input from client
 class ClientHandler # rubocop:disable Metrics/ClassLength
   include Response
   include Commands
 
-  attr_reader :client, :master_info, :replication_id, :offset, :store, :replicas
+  attr_reader :client, :master_server, :client_is_master, :replication_id, :offset, :store, :replicas
 
-  def initialize(client, master_info, replication_id, offset, store, replicas) # rubocop:disable Metrics/ParameterLists
+  def initialize(client, master_server, client_is_master, replication_id, offset, store, replicas) # rubocop:disable Metrics/ParameterLists
     @client = client
-    @master_info = master_info
+    @master_server = master_server
+    @client_is_master = client_is_master
     @replication_id = replication_id
     @offset = offset
     @store = store
     @replicas = replicas
   end
 
-  def execute_command(commands) # rubocop:disable Metrics/MethodLength, Metrics/CyclomaticComplexity, Metrics/AbcSize
-    commands.each_with_index do |input, index|
-      response = case input.upcase
-                 when PING_COMMAND
-                   respond_to_ping
-                 when ECHO_COMMAND
-                   respond_to_echo(commands[index + 1])
-                 when SET_COMMAND
-                   exp = expiry?(commands[index + 3]) ? commands[index + 4] : nil
-                   set_value(commands[index + 1..index + 2], exp)
-                 when GET_COMMAND
-                   get_value(commands[index + 1])
-                 when INFO_COMMAND
-                   respond_to_info(commands[index + 1])
-                 when REPLCONF_COMMAND
-                   respond_to_replconf(commands[index + 1])
-                 when PSYNC_COMMAND # executed in master server
-                   respond_to_psync_command
-                 end
+  def execute_command(input)
+    command = commands.find { |cmd| cmd.match?(input) }
+    response = send(command_handlers[command.name], input) if command
 
-      client.write(response) unless response.nil?
-    end
+    client.write(response) unless response.nil?
   end
 
   private
 
-  def respond_to_ping
-    # respond to PING command
-    generate_simple_string('PONG')
+  def command_consts
+    Commands.constants.map { |c| Commands.const_get(c) }
   end
 
-  def respond_to_echo(argument)
+  def commands
+    command_consts.map { |c| Command.new(c) }
+  end
+
+  def command_handlers
+    {}.tap do |handlers|
+      command_consts.each do |command|
+        handlers[command] = "respond_to_#{command.downcase}".to_sym
+      end
+    end
+  end
+
+  def respond_to_ping(_input)
+    # respond to PING command
+    generate_simple_string('PONG') unless client_is_master
+  end
+
+  def respond_to_echo(input)
     # respond to ECHO command
+    argument = input.split[1]
     generate_bulk_string(argument)
   end
 
-  def set_value((key, value), exp)
+  def respond_to_set(input)
     # respond to SET command
-    exp_at = exp.nil? ? nil : (exp.to_i / 1000.0).to_f + Time.now.to_f
-    store[key] = { value: value, exp: exp_at }
-
-    # update replicas if running server is master server
-    update_replicas(SET_COMMAND, key, value)
-
-    # only send response if client == master...running on master port
-    generate_simple_string('OK') unless master_client?(client)
+    commands = input.split
+    exp = expiry?(commands[3]) ? commands[4] : nil
+    set_value(commands[1..2], exp)
   end
 
-  def get_value(key)
+  def respond_to_get(command)
     # respond to GET command
+    key = command.split[1]
     val = store.fetch(key, nil)
 
     return null_bulk_string if val.nil?
@@ -82,18 +98,48 @@ class ClientHandler # rubocop:disable Metrics/ClassLength
     generate_bulk_string(val[:value])
   end
 
-  def expiry?(input)
-    input&.upcase == 'PX'
-  end
-
-  def respond_to_info(parameter)
+  def respond_to_info(command)
+    parameter = command.split[1]
     response = replication_info if parameter == 'replication'
 
     generate_bulk_string(response)
   end
 
+  def respond_to_psync(_command)
+    # store client as a replica: ideally this should be done after RDB has been loaded by replica
+    replicas << client if master_server
+
+    client.write(generate_simple_string("FULLRESYNC #{replication_id} #{offset}"))
+
+    # send RDB file to replica
+    "$#{decoded_hex_rdb.length}#{CRLF}#{decoded_hex_rdb}"
+  end
+
+  def respond_to_replconf(command)
+    type = command.split[1]
+    return generate_resp_array(['REPLCONF', 'ACK', offset.to_s]) if type == REPLCONF_GETACK_COMMAND
+
+    generate_simple_string('OK')
+  end
+
+  def set_value((key, value), exp)
+    # respond to SET command
+    exp_at = exp.nil? ? nil : (exp.to_i / 1000.0).to_f + Time.now.to_f
+    store[key] = { value: value, exp: exp_at }
+
+    # update replicas if running server is master server
+    update_replicas(SET_COMMAND, key, value)
+
+    # only send response if client == master...running on master port
+    generate_simple_string('OK') unless client_is_master
+  end
+
+  def expiry?(input)
+    input&.upcase == 'PX'
+  end
+
   def replication_info
-    role = master? ? 'master' : 'slave'
+    role = master_server ? 'master' : 'slave'
     resp = <<-REPLICATION
       role:#{role}
     REPLICATION
@@ -114,40 +160,13 @@ class ClientHandler # rubocop:disable Metrics/ClassLength
     [empty_hex_rdb].pack('H*')
   end
 
-  def respond_to_psync_command
-    # store client as a replica: ideally this should be done after RDB has been loaded by replica
-    replicas << client if master?
-
-    client.write(generate_simple_string("FULLRESYNC #{replication_id} #{offset}"))
-
-    # send RDB file to replica
-    "$#{decoded_hex_rdb.length}#{CRLF}#{decoded_hex_rdb}"
-  end
-
-  def respond_to_replconf(type)
-    return generate_resp_array(['REPLCONF', 'ACK', offset.to_s]) if type == REPLCONF_GETACK_COMMAND
-
-    generate_simple_string('OK')
-  end
-
-  def master?
-    master_info[:host].nil? && master_info[:port].nil?
-  end
-
   def update_replicas(command, key, value)
-    return unless master?
+    return unless master_server
 
     replicas.each do |client|
       client.write(generate_resp_array([command, key, value]))
     end
   end
-
-  def master_client?(client)
-    return false if master?
-
-    host = client.peeraddr[2]
-    port = client.peeraddr[1]
-
-    master_info[:host] == host && master_info[:port] == port
-  end
 end
+
+# ClientHandler.new([], false, false, '123', 1, {}, []).execute_command('WAIT 4 500')
