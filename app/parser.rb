@@ -5,6 +5,8 @@ class Parser
   def self.parse(string)
     sanitised_string = extract_after_first_special_character(string)
 
+    # pp '--sani', sanitised_string
+
     case sanitised_string[0]
     when '*'
       parse_array(string)
@@ -17,7 +19,7 @@ class Parser
   def self.parse_array(input) # rubocop:disable Metrics/MethodLength
     [].tap do |result|
       # Split input string by "\r\n" to get individual elements
-      elements = input.split("\r\n")
+      elements = split_string_safe(input)
 
       # Loop through each element
       until elements.empty?
@@ -35,22 +37,35 @@ class Parser
 
   # Bulk String: https://redis.io/docs/reference/protocol-spec/#bulk-strings
   def self.parse_bulk_string(input) # rubocop:disable Metrics/MethodLength
-    elements = input.split("\r\n")
-    full_command = ''
+    elements = split_string_safe(input)
+    result = []
 
     until elements.empty?
       element = elements.shift
+      res = []
 
       case element[0]
       when '$'
+        count = element[1..].to_i
         command = elements.shift&.strip
         next if command&.start_with?('REDIS')
 
-        full_command += "#{command} " if command
+        res << command
+
+        while res.length < count
+          comm = elements.shift&.strip
+          break if comm.nil?
+
+          next if comm.start_with?('$')
+
+          res << comm
+        end
       end
+
+      result << res.join(' ') unless res.empty?
     end
 
-    [full_command.strip]
+    result
   end
 
   def self.parse_array_elements(count, elements)
@@ -75,11 +90,51 @@ class Parser
   end
 
   def self.extract_after_first_special_character(string)
-    index = string.index(/[$*]/)
+    index = find_index_safe(string)
     return string unless index
 
     string[index..]
   end
+end
+
+def find_index_safe(string, max_retries = 3) # rubocop:disable Metrics/MethodLength
+  retries = 0
+  begin
+    index = string.index(/[$*]/)
+  rescue ArgumentError
+    # Handle invalid byte sequence error
+    return nil unless retries < max_retries
+
+    # Remove invalid bytes and retry the operation
+    cleaned_string = string.encode('UTF-8', 'binary', invalid: :replace, undef: :replace, replace: '')
+    string = cleaned_string
+    retries += 1
+    retry
+
+    # Reached maximum retries, return nil
+  end
+
+  index
+end
+
+def split_string_safe(string, max_retries = 3) # rubocop:disable Metrics/MethodLength
+  retries = 0
+  begin
+    parts = string.split("\r\n")
+  rescue ArgumentError
+    # Handle invalid byte sequence error
+    return [] unless retries < max_retries
+
+    # Remove invalid bytes and retry the operation
+    cleaned_string = string.encode('UTF-8', 'binary', invalid: :replace, undef: :replace, replace: '')
+    string = cleaned_string
+    retries += 1
+    retry
+
+    # Reached maximum retries, return nil
+  end
+
+  parts
 end
 
 # def self.parse_array(string)
