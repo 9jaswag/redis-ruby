@@ -27,6 +27,10 @@ module Response
     "+#{string}#{CRLF}"
   end
 
+  def generate_simple_integer(int)
+    ":#{int}#{CRLF}"
+  end
+
   def null_bulk_string
     "$-1#{CRLF}"
   end

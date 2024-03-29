@@ -2,25 +2,7 @@
 
 require_relative 'response'
 require_relative 'commands'
-
-# Command class
-class Command
-  attr_reader :name
-
-  def initialize(name)
-    @name = name
-  end
-
-  def match?(input)
-    input.match?(regex)
-  end
-
-  private
-
-  def regex
-    /\b#{Regexp.escape(name)}\b/i
-  end
-end
+require_relative 'command'
 
 # execute commands based on input from client
 class ClientHandler # rubocop:disable Metrics/ClassLength
@@ -106,6 +88,7 @@ class ClientHandler # rubocop:disable Metrics/ClassLength
   end
 
   def respond_to_psync(_command)
+    # executed in master server
     # store client as a replica: ideally this should be done after RDB has been loaded by replica
     replicas << client if master_server
 
@@ -122,9 +105,15 @@ class ClientHandler # rubocop:disable Metrics/ClassLength
     generate_simple_string('OK')
   end
 
+  def respond_to_wait(command)
+    _, _numreplicas, _timeout = command.split
+
+    generate_simple_integer(replicas.size)
+  end
+
   def set_value((key, value), exp)
     # respond to SET command
-    exp_at = exp.nil? ? nil : (exp.to_i / 1000.0).to_f + Time.now.to_f
+    exp_at = exp.nil? ? nil : update_current_time_by_ms(exp)
     store[key] = { value: value, exp: exp_at }
 
     # update replicas if running server is master server
@@ -165,8 +154,13 @@ class ClientHandler # rubocop:disable Metrics/ClassLength
 
     replicas.each do |client|
       client.write(generate_resp_array([command, key, value]))
+
+      # client_ack = client.gets
+      # update acknowledge count
     end
   end
-end
 
-# ClientHandler.new([], false, false, '123', 1, {}, []).execute_command('WAIT 4 500')
+  def update_current_time_by_ms(duration)
+    (duration.to_i / 1000.0).to_f + Time.now.to_f
+  end
+end
